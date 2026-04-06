@@ -327,10 +327,10 @@ async def register_qwen_account() -> Optional[Account]:
                     return None
 
                 log.info("[Register] [7/7] 提取 cookies...")
-                all_cookies = await page.context.cookies()
-                cookie_str = "; ".join(f"{c.get('name','')}={c.get('value','')}" for c in all_cookies if "qwen" in c.get("domain", ""))
-                log.info(f"[Register] ✓ 注册完成: {email}")
-                return Account(email=email, password=password, token=token, cookies=cookie_str, username=username)
+            all_cookies = await page.context.cookies()
+            cookie_str = "; ".join(f"{c.get('name','')}={c.get('value','')}" for c in all_cookies if "qwen" in c.get("domain", ""))
+            log.info(f"[Register] ✓ 注册完成: {email}")
+            return Account(email=email, password=password, token=token, cookies=cookie_str, username=username, activation_pending=False)
         except Exception as e:
             log.error(f"[Register] 浏览器引擎崩溃或被拦截: {str(e)}")
             return None
