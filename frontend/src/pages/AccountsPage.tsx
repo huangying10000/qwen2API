@@ -1,20 +1,26 @@
 import { useState, useEffect } from "react"
 import { Button } from "../components/ui/button"
-import { Trash2, Plus, RefreshCw, Bot, ShieldCheck } from "lucide-react"
+import { Trash2, Plus, RefreshCw, Bot, ShieldCheck, MailWarning } from "lucide-react"
 import { toast } from "sonner"
+import { getAuthHeader } from "../lib/auth"
 
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<any[]>([])
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
+  const [token, setToken] = useState("")
   const [registering, setRegistering] = useState(false)
   const [verifying, setVerifying] = useState<string | null>(null)
+  const [verifyingAll, setVerifyingAll] = useState(false)
 
   const fetchAccounts = () => {
-    fetch("http://localhost:8080/api/admin/accounts", { headers: { Authorization: "Bearer admin" } })
-      .then(res => res.json())
+    fetch("http://localhost:8080/api/admin/accounts", { headers: getAuthHeader() })
+      .then(res => {
+        if(!res.ok) throw new Error()
+        return res.json()
+      })
       .then(data => setAccounts(data.accounts || []))
-      .catch(() => toast.error("刷新失败：无法连接后端服务"))
+      .catch(() => toast.error("刷新失败：无法连接或当前会话 Key 错误"))
   }
 
   useEffect(() => {
@@ -22,21 +28,22 @@ export default function AccountsPage() {
   }, [])
 
   const handleAdd = () => {
-    if (!email || !password) {
-      toast.error("邮箱和密码不能为空")
+    if (!token) {
+      toast.error("Token不能为空")
       return
     }
-    const id = toast.loading("正在添加账号...")
+    const id = toast.loading("正在手动注入账号...")
     fetch("http://localhost:8080/api/admin/accounts", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer admin" },
-      body: JSON.stringify({ email, password, token: "", valid: true })
+      headers: { "Content-Type": "application/json", ...getAuthHeader() },
+      body: JSON.stringify({ email: email || `manual_${Date.now()}@qwen`, password, token, valid: true })
     }).then(res => res.json())
       .then(data => {
         if(data.status === "success" || data.ok) {
           toast.success("添加成功", { id })
           setEmail("")
           setPassword("")
+          setToken("")
           fetchAccounts()
         } else {
           toast.error("添加失败", { id })
@@ -48,7 +55,7 @@ export default function AccountsPage() {
     const id = toast.loading("正在删除...")
     fetch(`http://localhost:8080/api/admin/accounts/${encodeURIComponent(emailToDelete)}`, {
       method: "DELETE",
-      headers: { Authorization: "Bearer admin" }
+      headers: getAuthHeader()
     }).then(() => {
       toast.success("账号已删除", { id })
       fetchAccounts()
@@ -57,37 +64,67 @@ export default function AccountsPage() {
   
   const handleAutoRegister = () => {
     setRegistering(true)
-    const id = toast.loading("浏览器无头注册引擎已拉起，正在全自动获取新千问账号，预计耗时 1~2 分钟，请勿关闭页面...")
+    const id = toast.loading("浏览器无头注册引擎已拉起，正在获取新号 (约需1~2分钟)...")
     fetch("http://localhost:8080/api/admin/accounts/register", {
       method: "POST",
-      headers: { Authorization: "Bearer admin" }
+      headers: getAuthHeader()
     }).then(res => res.json())
       .then(data => {
         if(data.ok) {
-          toast.success(`全自动注册成功！已提取 Token 并入池：${data.email}`, { id, duration: 8000 })
+          toast.success(`全自动注册成功！${data.email}`, { id, duration: 8000 })
           fetchAccounts()
         } else {
-          toast.error(data.error || "自动化注册被阿里风控阻截", { id })
+          toast.error(data.error || "自动化注册失败", { id })
         }
       })
-      .catch(() => toast.error("连接超时或注册异常终止", { id }))
+      .catch(() => toast.error("注册请求异常", { id }))
       .finally(() => setRegistering(false))
   }
   
   const handleVerify = (emailToVerify: string) => {
     setVerifying(emailToVerify)
-    const id = toast.loading(`正在强制验活账号: ${emailToVerify}...`)
+    const id = toast.loading(`正在强制验活: ${emailToVerify}...`)
     fetch(`http://localhost:8080/api/admin/accounts/${encodeURIComponent(emailToVerify)}/verify`, {
       method: "POST",
-      headers: { Authorization: "Bearer admin" }
+      headers: getAuthHeader()
     }).then(res => res.json())
       .then(data => {
-        if(data.valid) toast.success(`账号存活，Token 健康！`, { id })
-        else toast.error(`账号已死，或触发限流`, { id })
+        if(data.valid) toast.success(`验证通过，Token 健康！`, { id })
+        else toast.error(`账号已失效`, { id })
         fetchAccounts()
       })
-      .catch(() => toast.error("验证请求失败", { id }))
+      .catch(() => toast.error("验证失败", { id }))
       .finally(() => setVerifying(null))
+  }
+
+  const handleVerifyAll = () => {
+    setVerifyingAll(true)
+    const id = toast.loading(`正在批量验活所有账号...`)
+    fetch(`http://localhost:8080/api/admin/verify`, {
+      method: "POST",
+      headers: getAuthHeader()
+    }).then(res => res.json())
+      .then(data => {
+        if(data.ok) toast.success(`批量验活完成`, { id })
+        else toast.error(`批量验活部分失败`, { id })
+        fetchAccounts()
+      })
+      .catch(() => toast.error("验证失败", { id }))
+      .finally(() => setVerifyingAll(false))
+  }
+
+  const handleActivate = (emailToActivate: string) => {
+    const id = toast.loading(`正在激活: ${emailToActivate}... (可能需要2分钟)`)
+    fetch(`http://localhost:8080/api/admin/accounts/${encodeURIComponent(emailToActivate)}/activate`, {
+      method: "POST",
+      headers: getAuthHeader()
+    }).then(res => res.json())
+      .then(data => {
+        if(data.ok) toast.success(`激活成功！`, { id })
+        else toast.error(`激活失败: ${data.message || '未知'}`, { id })
+        fetchAccounts()
+      })
+      .catch(() => toast.error("激活失败", { id }))
   }
 
   return (
@@ -98,7 +135,10 @@ export default function AccountsPage() {
           <p className="text-muted-foreground">管理通义千问上游账号池。</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => { fetchAccounts(); toast.success("大盘数据已刷新"); }}>
+          <Button variant="secondary" onClick={handleVerifyAll} disabled={verifyingAll}>
+            <ShieldCheck className={`mr-2 h-4 w-4 ${verifyingAll ? 'animate-pulse' : ''}`} /> 验证全部
+          </Button>
+          <Button variant="outline" onClick={() => { fetchAccounts(); toast.success("数据已刷新"); }}>
             <RefreshCw className="mr-2 h-4 w-4" /> 刷新状态
           </Button>
           <Button variant="default" onClick={handleAutoRegister} disabled={registering} className="bg-blue-600 hover:bg-blue-700">
@@ -108,30 +148,43 @@ export default function AccountsPage() {
         </div>
       </div>
 
-      <div className="flex gap-4 items-end bg-card p-4 rounded-xl border">
-        <div className="flex-1">
-          <label className="text-sm font-medium mb-1 block">手动录入邮箱</label>
-          <input 
-            type="text" 
-            value={email} 
-            onChange={e => setEmail(e.target.value)} 
-            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" 
-            placeholder="例如: test@example.com" 
-          />
+      <div className="flex flex-col gap-4 bg-card p-4 rounded-xl border">
+        <h3 className="text-sm font-semibold">手动添加账号</h3>
+        <div className="flex gap-4 items-start">
+          <div className="flex-1">
+            <label className="text-xs font-medium mb-1 block text-muted-foreground">Token (必填)</label>
+            <textarea 
+              rows={1}
+              value={token} 
+              onChange={e => setToken(e.target.value)} 
+              className="flex min-h-[40px] w-full rounded-md border border-input bg-background px-3 py-2 text-xs font-mono resize-y" 
+              placeholder="eyJ..." 
+            />
+          </div>
+          <div className="w-48">
+            <label className="text-xs font-medium mb-1 block text-muted-foreground">邮箱 (选填)</label>
+            <input 
+              type="text" 
+              value={email} 
+              onChange={e => setEmail(e.target.value)} 
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" 
+              placeholder="可留空" 
+            />
+          </div>
+          <div className="w-48">
+            <label className="text-xs font-medium mb-1 block text-muted-foreground">密码 (选填，用于自愈)</label>
+            <input 
+              type="password" 
+              value={password} 
+              onChange={e => setPassword(e.target.value)} 
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" 
+              placeholder="密码" 
+            />
+          </div>
+          <Button onClick={handleAdd} variant="secondary" className="h-10">
+            <Plus className="mr-2 h-4 w-4" /> 注入
+          </Button>
         </div>
-        <div className="flex-1">
-          <label className="text-sm font-medium mb-1 block">密码</label>
-          <input 
-            type="password" 
-            value={password} 
-            onChange={e => setPassword(e.target.value)} 
-            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" 
-            placeholder="密码" 
-          />
-        </div>
-        <Button onClick={handleAdd} variant="secondary">
-          <Plus className="mr-2 h-4 w-4" /> 手动注入
-        </Button>
       </div>
 
       <div className="rounded-xl border bg-card overflow-hidden">
@@ -166,10 +219,15 @@ export default function AccountsPage() {
                 </td>
                 <td className="p-4 align-middle">{acc.inflight} 并发</td>
                 <td className="p-4 align-middle text-right space-x-2">
-                  <Button variant="outline" size="sm" onClick={() => handleVerify(acc.email)} disabled={verifying === acc.email}>
+                  {!acc.valid && (
+                    <Button variant="outline" size="sm" onClick={() => handleActivate(acc.email)} className="text-orange-600 border-orange-200 hover:bg-orange-50">
+                      <MailWarning className="h-4 w-4 mr-1" /> 激活
+                    </Button>
+                  )}
+                  <Button variant="outline" size="sm" onClick={() => handleVerify(acc.email)} disabled={verifying === acc.email} title="强制验活">
                     {verifying === acc.email ? <RefreshCw className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => handleDelete(acc.email)} className="text-destructive hover:bg-destructive/10 hover:text-destructive">
+                  <Button variant="ghost" size="sm" onClick={() => handleDelete(acc.email)} className="text-destructive hover:bg-destructive/10 hover:text-destructive" title="删除">
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 </td>

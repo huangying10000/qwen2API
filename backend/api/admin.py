@@ -85,6 +85,36 @@ async def register_new_account(request: Request):
     except Exception as e:
         return {"ok": False, "error": f"注册发生异常: {str(e)}"}
 
+@router.post("/verify", dependencies=[Depends(verify_admin)])
+async def verify_all_accounts(request: Request):
+    """批量验活所有账号"""
+    from backend.core.store import store
+    from backend.services.qwen_client import client
+    
+    results = []
+    for acc in store.accounts:
+        valid = await client.verify_token(acc.token)
+        acc.valid = valid
+        results.append({"email": acc.email, "valid": valid})
+    store.save()
+    return {"ok": True, "results": results}
+
+@router.post("/accounts/{email}/activate", dependencies=[Depends(verify_admin)])
+async def activate_account_route(email: str, request: Request):
+    """点击临时邮箱的激活链接"""
+    from backend.core.store import store
+    from backend.services.auth_resolver import activate_account
+    
+    acc = next((a for a in store.accounts if a.email == email), None)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+        
+    try:
+        ok = await activate_account(acc)
+        return {"ok": ok, "email": acc.email, "message": "激活成功" if ok else "未能找到激活链接或获取Token"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 @router.post("/accounts/{email}/verify", dependencies=[Depends(verify_admin)])
 async def verify_account(email: str, request: Request):
     """强制验活或尝试刷新指定账号的 Token"""
@@ -98,7 +128,6 @@ async def verify_account(email: str, request: Request):
         
     valid = await client.verify_token(acc.token)
     if not valid and acc.password:
-        # Token 失效，尝试用密码走 auth_resolver 自动登录拿新 Token
         try:
             new_token = await get_fresh_token(acc.email, acc.password)
             if new_token:
@@ -109,7 +138,7 @@ async def verify_account(email: str, request: Request):
             
     acc.valid = valid
     store.save()
-    return {"ok": True, "email": acc.email, "valid": valid, "message": "验证通过" if valid else "账号已死或密码错误"}
+    return {"ok": True, "email": acc.email, "valid": valid}
 
 @router.delete("/accounts/{email}", dependencies=[Depends(verify_admin)])
 async def delete_account(email: str, request: Request):
