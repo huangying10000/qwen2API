@@ -398,6 +398,19 @@ async def activate_account(acc: Account) -> bool:
                     except Exception:
                         pass
 
+            # 新增增强型兜底策略（不修改上方原有代码）：
+            # 尝试通过评估页面内部所有的 iframe 和文本，强制将第一封邮件的 DOM 显示出来
+            if not clicked_email:
+                try:
+                    log.info("[Activate] 尝试通过增强型 JavaScript 选择器点击第一封邮件")
+                    await page.evaluate('''() => {
+                        const emails = document.querySelectorAll('li, tr, .mail-item, .email-item');
+                        if(emails.length > 0) { emails[0].click(); }
+                    }''')
+                    await asyncio.sleep(4)
+                except Exception as e:
+                    log.debug(f"[Activate] 增强型点击失败: {e}")
+
             # Step 3: Extract activation link — email body is inside #emailFrame iframe
             js_find_link = """() => {
                 const kws = ['qwen', 'verify', 'activate', 'confirm', 'aliyun', 'alibaba', 'qwenlm'];
@@ -434,6 +447,20 @@ async def activate_account(acc: Account) -> bool:
             # Fallback: search main page
             if not verify_link:
                 verify_link = await page.evaluate(js_find_link)
+
+            # 新增增强型提取策略（不修改上方原有代码）：
+            # 有时 GPTMail 会用 shadow DOM 渲染内容，直接读取 html 文本是最硬核的兜底
+            if not verify_link:
+                try:
+                    log.info("[Activate] 尝试通过全量 DOM 强制提取激活链接")
+                    page_html = await page.content()
+                    matches = re.findall(r'https?://[^\s"\'<>\\,\)]+', page_html)
+                    for m in matches:
+                        if any(kw in m.lower() for kw in keywords):
+                            verify_link = m
+                            break
+                except Exception as e:
+                    log.debug(f"[Activate] 全量 DOM 提取失败: {e}")
 
             if not verify_link:
                 log.warning(f"[Activate] {acc.email} 邮箱页面未找到激活链接，URL={page.url}")
