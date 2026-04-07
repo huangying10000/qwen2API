@@ -109,20 +109,60 @@ async def chat_completions(request: Request):
                     
                 completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
                 
-                # Thinking blocks
-                if reasoning_text:
-                    # In OpenAI format, reasoning is usually not natively supported in chunks unless using reasoning_content,
-                    # but we can output it as content or ignore it. For now, we'll output it as content.
-                    chunk = {
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "model": model,
-                        "choices": [{"index": 0, "delta": {"content": reasoning_text}, "finish_reason": None}]
-                    }
-                    yield f"data: {json.dumps(chunk)}\n\n"
+                # 修复 OpenAI 流式规范：严格按照 role -> tool_calls(name) -> tool_calls(args) -> finish 的顺序吐出 chunk
+                # Role chunk
+                yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'model': model, 'choices': [{'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': None}]})}\n\n"
+
+                has_tool_call = stop_reason == "tool_use" or stop_reason == "tool_calls"
+                
+                if has_tool_call:
+                    tc_list = [b for b in blocks if b["type"] == "tool_use"]
+                    for idx, tc in enumerate(tc_list):
+                        # 1. 吐出函数名
+                        tc_name_chunk = {
+                            "id": completion_id,
+                            "object": "chat.completion.chunk",
+                            "model": model,
+                            "choices": [{"index": 0, "delta": {
+                                "tool_calls": [{
+                                    "index": idx,
+                                    "id": tc["id"],
+                                    "type": "function",
+                                    "function": {"name": tc["name"], "arguments": ""}
+                                }]
+                            }, "finish_reason": None}]
+                        }
+                        yield f"data: {json.dumps(tc_name_chunk)}\n\n"
+                        
+                        # 2. 吐出参数
+                        tc_args_chunk = {
+                            "id": completion_id,
+                            "object": "chat.completion.chunk",
+                            "model": model,
+                            "choices": [{"index": 0, "delta": {
+                                "tool_calls": [{
+                                    "index": idx,
+                                    "function": {"arguments": json.dumps(tc.get("input", {}), ensure_ascii=False)}
+                                }]
+                            }, "finish_reason": None}]
+                        }
+                        yield f"data: {json.dumps(tc_args_chunk)}\n\n"
                     
-                for blk in blocks:
-                    if blk["type"] == "text" and blk.get("text"):
+                    stop_reason = "tool_calls"
+                else:
+                    # Thinking blocks
+                    if reasoning_text:
+                        chunk = {
+                            "id": completion_id,
+                            "object": "chat.completion.chunk",
+                            "model": model,
+                            "choices": [{"index": 0, "delta": {"content": reasoning_text}, "finish_reason": None}]
+                        }
+                        yield f"data: {json.dumps(chunk)}\n\n"
+                    
+                    # Normal text blocks
+                    txt_list = [b for b in blocks if b["type"] == "text" and b.get("text")]
+                    for blk in txt_list:
                         chunk = {
                             "id": completion_id,
                             "object": "chat.completion.chunk",
@@ -130,24 +170,7 @@ async def chat_completions(request: Request):
                             "choices": [{"index": 0, "delta": {"content": blk["text"]}, "finish_reason": None}]
                         }
                         yield f"data: {json.dumps(chunk)}\n\n"
-                    elif blk["type"] == "tool_use":
-                        tc_chunk = {
-                            "id": completion_id,
-                            "object": "chat.completion.chunk",
-                            "model": model,
-                            "choices": [{"index": 0, "delta": {
-                                "tool_calls": [{
-                                    "id": blk["id"],
-                                    "type": "function",
-                                    "function": {
-                                        "name": blk["name"],
-                                        "arguments": json.dumps(blk.get("input", {}), ensure_ascii=False)
-                                    }
-                                }]
-                            }, "finish_reason": "tool_calls"}]
-                        }
-                        yield f"data: {json.dumps(tc_chunk)}\n\n"
-                        
+
                 # Final chunk
                 final_chunk = {
                     "id": completion_id,
