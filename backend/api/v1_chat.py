@@ -84,7 +84,7 @@ async def chat_completions(request: Request):
                 
                 # Detect Qwen native tool call interception
                 import re
-                native_blocked_m = re.match(r'^Tool (\w+) does not exists?\.?$', answer_text.strip())
+                native_blocked_m = re.search(r'Tool (\w+) does not exists?\.?', answer_text.strip(), re.IGNORECASE)
                 if native_blocked_m and tools and stream_attempt < 4:
                     blocked_name = native_blocked_m.group(1)
                     client.account_pool.release(acc)
